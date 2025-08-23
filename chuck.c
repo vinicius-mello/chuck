@@ -3,59 +3,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
-
-typedef struct {
-	const char * str;
-	int64_t len;
-} substr;
-
-substr substr_null() {
-	substr r = { .str = 0, .len = -1};
-	return r;
-}
-
-int substr_isempty(substr s) {
-	return s.str !=0 && s.len ==0;
-}
-
-substr substr_init(const char * s) {
-	substr r = { .str = s, .len = strlen(s)};
-	return r;
-}
-
-int substr_in(char c, substr s) {
-	for(int i=0;i<s.len;++i) 
-		if(c==s.str[i]) return 1;
-	return 0;
-}
-
-int substr_equal(substr sa, substr sb) {
-	if(sa.len != sb.len) return 0;
-	for(int i=0;i<sa.len;++i) 
-		if(sa.str[i]!=sb.str[i]) return 0;
-	return 1;
-}
-
-void substr_print(substr s, int quote) {
-	if(quote) printf("'");
-	for(int i=0; i<s.len; ++i) printf("%c", s.str[i]);
-	if(quote) printf("'");
-}
-
-substr substr_next(substr s, substr last, substr delim) {
-	substr r;
-	const char * p = s.str;
-	int i = last.str==0 ? 0 : (last.str - p) + last.len + 1;
-	while(i<s.len && substr_in(p[i], delim)) ++i;
-	r.str = &p[i];
-	while(i<s.len && !substr_in(p[i], delim)) ++i;
-	r.len = (&p[i] - r.str);
-	return r;
-}
-
-substr symbol;
-substr stream;
-substr delim = {.str=" \t\n\r", .len = 4};
+#include <ctype.h>
 
 typedef struct {
   int32_t a;
@@ -85,14 +33,17 @@ static int dataStackTop = -1;
 #define TOP(S) ((S)[(S##Top)])
 #define LEN(S) ((S##Top)+1)
 
+#define SCREEN_SIZE (16*64)
+
 static cell * state;
 static int64_t here = 1;
 static int64_t code = 1;
-static int64_t text = 128;
+static int64_t text = SCREEN_SIZE;
 static int64_t _here;
 static int64_t _code;
 static int64_t _text;
 static int64_t ip;
+
 
 #define FLAG_PRIMITIVE (1LL << 63)
 #define FLAG_IMMEDIATE (1LL << 62)
@@ -110,7 +61,7 @@ static int64_t ip;
 #define PRIM_CFETCH ( 9 | FLAG_PRIMITIVE )
 #define PRIM_STORE ( 10 | FLAG_PRIMITIVE )
 #define PRIM_QUIT ( 11 | FLAG_PRIMITIVE )
-#define PRIM_EXEC ( 12 | FLAG_PRIMITIVE )
+#define PRIM_EXECUTE ( 12 | FLAG_PRIMITIVE )
 #define PRIM_HERE ( 13 | FLAG_PRIMITIVE )
 #define PRIM_TEXT ( 14 | FLAG_PRIMITIVE )
 #define PRIM_IMMEDIATE ( 15 | FLAG_PRIMITIVE )
@@ -142,6 +93,9 @@ static int64_t ip;
 #define PRIM_DROP ( 41 | FLAG_PRIMITIVE )
 #define PRIM_PACK ( 42 | FLAG_PRIMITIVE )
 #define PRIM_UNPACK ( 43 | FLAG_PRIMITIVE )
+#define PRIM_ENTRY ( 44 | FLAG_PRIMITIVE )
+#define PRIM_DIV ( 45 | FLAG_PRIMITIVE )
+#define PRIM_MOD ( 46 | FLAG_PRIMITIVE )
 
 typedef struct dict_entry {
   char * symbol;
@@ -167,13 +121,13 @@ static dict_entry dictionary[] = {
   {"postpone", PRIM_POSTPONE},
   {"(comp)", PRIM_COMP},
   {"compile", PRIM_COMPILE},
-  {"exec", PRIM_EXEC},
+  {"exec", PRIM_EXECUTE},
   {"here", PRIM_HERE},
   {"text", PRIM_TEXT},
   {"immediate", PRIM_IMMEDIATE},
   {"0branch", PRIM_ZERO_BRANCH},
-  {"R>", PRIM_FROM_RETURN},
-  {">R", PRIM_TO_RETURN},
+  {"r>", PRIM_FROM_RETURN},
+  {">r", PRIM_TO_RETURN},
   {">mark", PRIM_MARK},
   {"<resolve", PRIM_RESOLVE},
   {"emit", PRIM_EMIT},
@@ -195,6 +149,9 @@ static dict_entry dictionary[] = {
   {"*", PRIM_MUL},
   {"pack", PRIM_PACK},
   {"unpack", PRIM_UNPACK},
+  {"entry", PRIM_ENTRY},
+  {"/", PRIM_DIV},
+  {"mod", PRIM_MOD},
 };
 
 #define MAX_DATA 4096
@@ -206,28 +163,38 @@ static cell program[MAX_PROGRAM];
 #define MAX_STRINGS 4096
 static char strings[MAX_STRINGS];
 
-pair_int newSymbol() {
-  pair_int r;
-	char * p = &strings[text]; 
-  r.a = text;
-	r.b = symbol.len;
-  strncpy(p, symbol.str, symbol.len);
+void str_print(pair_int s, int quote) {
+	if(quote) putchar('\'');
+	for(int i=0; i<s.b; ++i) putchar(strings[s.a+i]);
+	if(quote) putchar('\'');
+}
+
+int str_equal(pair_int sa, pair_int sb) {
+	if(sa.b != sb.b) return 0;
+	for(int i=0;i<sa.b; ++i) 
+		if(strings[sa.a+i]!=strings[sb.a+i]) return 0;
+	return 1;
+}
+
+pair_int str_append(pair_int s) {
+  pair_int r = {.a = text, .b = s.b};
+  if(s.a!=r.a) 
+		strncpy(&strings[r.a], &strings[s.a], s.b);
   text = text+r.b;
   return r;
 }
 
-void fill_dict() {
+void init() {
+	state = &data[0];
+  (*state).i = 0;
 	int64_t prev = 0;
-	for(int i=0; i<sizeof(dictionary)/sizeof(dict_entry);++i) {
+	for(int i=0; i<sizeof(dictionary)/sizeof(dict_entry); ++i) {
 		dict_entry e = dictionary[i];
 		latest = here;
-		pair_int pi;
-		pi.b = strlen(e.symbol);
-		pi.a = text;
+		pair_int pi = { .a = text, .b = strlen(e.symbol) };
 	  strncpy(&strings[pi.a], e.symbol, pi.b);
 		text += pi.b; 
 		int64_t tok = e.address;
-		//printf("%s %llx %ld\n", e.symbol, tok, prev);
 		data[here++] = (cell) tok;
 		data[here++] = (cell) pi;
 		data[here++] = (cell) prev;
@@ -235,18 +202,7 @@ void fill_dict() {
 	}
 }
 
-int64_t lookup(substr s) {
-	int64_t r = latest;
-	do {
-		pair_int pi = data[r+1].pi;
-		substr t = {.str = &strings[pi.a], .len = pi.b};
-		if(substr_equal(s, t)) break;
-		r = data[r+2].i;
-	} while(r);
-	//substr_print(s,0);
-	//printf(" %ld\n", r);
-	return r;
-}
+void exec(int64_t t);
 
 void call() {
   PUSH(returnStack, (int64_t)-1);
@@ -263,14 +219,64 @@ void call() {
   } while(ip!=0);
 }
 
-#define compile(x) (program[code++] = (cell)(x))
+#define compile(x) (program[code++].i = (int64_t)(x))
+
+void find() {
+	int64_t r = latest;
+	pair_int pi = POP(dataStack).pi;
+	do {
+		pair_int ti = data[r+1].pi;
+		if(str_equal(pi, ti)) break;
+			r = data[r+2].i;
+	} while(r);
+	PUSH(dataStack, r);
+}
+
+static int64_t in;
+static int64_t ntib;
+
+void parse() {
+  char c = (char) POP(dataStack).i;
+  int64_t l = 0;
+  while(in<ntib && strings[in]!=c) {
+		strings[text+l] = strings[in];
+		l++;in++;
+	}
+	in += 1;
+	strings[text+l] = 0;
+	while(in<ntib && isspace(strings[in])) in++;
+	pair_int pi = { .a=text, .b=l };
+  PUSH(dataStack, pi);
+}
+
+void entry() {
+	_here = here;
+  _text = text;
+	_code = code;
+	PUSH(dataStack, (int64_t)32);
+	parse();
+  data[here++] = (cell) code;
+	data[here++] = (cell) str_append(POP(dataStack).pi);
+	data[here++] = (cell) latest;
+}
+
+void execute() {
+	int64_t a = POP(dataStack).i;
+	if(a & FLAG_PRIMITIVE) exec(a);
+  else {
+		ip = a & CLEAR_FLAGS;
+    call();
+	}
+}
+
+void reveal() {
+	latest = _here;
+}
 
 void exec(int64_t t) {
 	int64_t a, b; 
   cell ca, cb;
- 	dict_entry * e;
 	pair_int pi;
-	substr s;
 	switch(t) {
 		case PRIM_EXIT:
 	  	ip = POP(returnStack).i;
@@ -328,62 +334,39 @@ void exec(int64_t t) {
 		case PRIM_IMMEDIATE:
 		  data[latest].i |= FLAG_IMMEDIATE;
 			break;
-		case PRIM_FIND: {
-				int64_t r = latest;
-				pi = POP(dataStack).pi;
-				s.str = &strings[pi.a];
-				s.len = pi.b;
-				do {
-					pi = data[r+1].pi;
-					substr t = {.str = &strings[pi.a], .len = pi.b};
-					if(substr_equal(s, t)) break;
-					r = data[r+2].i;
-				} while(r);
-				PUSH(dataStack, r);
-			}
+		case PRIM_FIND: 
+			find();
 			break;
-		case PRIM_EXEC:
+		case PRIM_EXECUTE:
       PUSH(returnStack, ip);
-			a = POP(dataStack).i;
-			if(a & FLAG_PRIMITIVE) exec(a);
-      else {
-			  ip = a & CLEAR_FLAGS;
-        call();
-			}
+			execute();
 			ip = POP(returnStack).i;
+			break;
+		case PRIM_ENTRY: 
+		  entry(); 
 			break;
 		case PRIM_COLON:
 		  (*state).i = 1;
-			_here = here;
-			_text = text;
-			_code = code;
-  		symbol = substr_next(stream, symbol, delim);
-			data[here++] = (cell) code;
-			data[here++] = (cell) newSymbol();
-			data[here++] = (cell) latest;
+			entry();
 			break;
 		case PRIM_DOT:
 		  printf("%lld", POP(dataStack));
 			break;
 		case PRIM_REVEAL:
-			latest = _here;
+			reveal();
 			break;
 		case PRIM_SEMICOLON:
-		  compile((int64_t)PRIM_EXIT);
-  		latest = _here;
+		  compile(PRIM_EXIT);
 			(*state).i = 0;  
+  		reveal();
 			break;
 		case PRIM_CREATE:
-		  _here = here;
-		  symbol = substr_next(stream, symbol, delim);
-  		data[here++] = (cell) code;
-			data[here++] = (cell) newSymbol();
-			data[here++] = (cell) latest;
-			compile((int64_t)PRIM_LIT);
+		  entry();
+			compile(PRIM_LIT);
   		compile(here);
-  		compile((int64_t)PRIM_EXIT);
-  		compile((int64_t)PRIM_EXIT);
-  		latest = _here;
+  		compile(PRIM_EXIT);
+  		compile(PRIM_EXIT);
+  		reveal();
 			break;
 		case PRIM_DOES:
   		a = data[latest].i & CLEAR_FLAGS;
@@ -391,20 +374,22 @@ void exec(int64_t t) {
   		program[a+3].i = ip + 2;
 			break;
 		case PRIM_COMP:
-		  compile(program[++ip]);
+		  compile(program[++ip].i);
 			break;
 		case PRIM_COMPILE:
-		  compile(POP(dataStack));
+		  compile(POP(dataStack).i);
 			break;
 		case PRIM_POSTPONE:
-		  symbol = substr_next(stream, symbol, delim);
-  		compile((int64_t)PRIM_COMP);
-  		compile(data[lookup(symbol)]);
+			PUSH(dataStack, (int64_t)32);
+			parse();
+		  find();
+			compile(PRIM_COMP);
+  		compile(data[POP(dataStack).i].i);
 			break;
 		case PRIM_ZERO_BRANCH:
-		  if(POP(dataStack).i == 0) {
+		  if(POP(dataStack).i == 0)
     		ip = program[ip+1].i-1;
-  		} else ++ip;
+  		else ++ip;
 			break;
 		case PRIM_BRANCH:
 		  ip = program[ip+1].i-1;
@@ -424,13 +409,11 @@ void exec(int64_t t) {
 			break;
 		case PRIM_EMIT:
 			a = POP(dataStack).i;
-  		printf("%c", (char) a);
+  		putchar((char) a);
 			break;
 		case PRIM_TYPE:
   		pi = POP(dataStack).pi;
-  		s.len = pi.b;
-			s.str = &strings[pi.a];
-  		substr_print(s, 0);
+  		str_print(pi, 0);
 			break;
 		case PRIM_COMMA:
   		ca = POP(dataStack);
@@ -459,27 +442,14 @@ void exec(int64_t t) {
   		b = POP(dataStack).i;
   		PUSH(dataStack, (int64_t)(b > a));
 			break;
-		case PRIM_PARSE: {
-		  symbol = substr_next(stream, symbol, delim);
-  		char c = (char) POP(dataStack).i;
-  		const char * p = symbol.str;
-  		char * q = &strings[text];
-  		int64_t l = 0;
-  		while(*p!=c) {
-    		*q++ = *p++;
-    		l++;
-  		}
-  		symbol.str = p-1;
-  		symbol.len = 1;
-  		pair_int pi = { .a=text, .b=l};  
-  		PUSH(dataStack, pi);
-		}
-		break;
+		case PRIM_PARSE: 
+			parse();
+			break;
 		case PRIM_DUP:
 		  PUSH(dataStack, TOP(dataStack));
 			break;
 		case PRIM_DROP:
-		  POP(dataStack);
+		  DROP(dataStack);
 			break;
 		case PRIM_PACK:
   		b = POP(dataStack).i;
@@ -493,82 +463,101 @@ void exec(int64_t t) {
   		PUSH(dataStack, (int64_t) pi.a);
   		PUSH(dataStack, (int64_t) pi.b);
 			break;
+		case PRIM_DIV:
+		  a = POP(dataStack).i;
+		  b = POP(dataStack).i;
+		  PUSH(dataStack, (b / a));
+			break;
+		case PRIM_MOD:
+		  a = POP(dataStack).i;
+		  b = POP(dataStack).i;
+		  PUSH(dataStack, (b % a));
+			break;
 	}
 }
 
-void interpreter(const char * input) {
-  stream = substr_init(input);
-	symbol = substr_null();
-	while(symbol = substr_next(stream, symbol, delim),
-		!substr_isempty(symbol))	{
-    int64_t e = lookup(symbol);
+void interpreter() {
+	while(in<ntib && isspace(strings[in])) in++;
+	while(in<ntib) {
+		PUSH(dataStack, (int64_t)32);
+		parse();
+		find();
+    int64_t e = POP(dataStack).i;
     if(e) {
-      cell addr = data[e];
-      int64_t immediate = addr.i & FLAG_IMMEDIATE;
+      int64_t a = data[e].i;
+      int64_t immediate = a & FLAG_IMMEDIATE;
       if((*state).i&&(!immediate))
-        compile(addr.i);
+        compile(a);
       else {
-        if(addr.i & FLAG_PRIMITIVE) exec(addr.i);
-        else {
-          ip = addr.i & CLEAR_FLAGS;
-          call();
-        }
+        PUSH(dataStack, a);
+				execute();
       }
     } else {
-      int64_t n = strtol(symbol.str, 0, 10);
+			const char * b = &strings[text]; 
+			char * e; 
+			int64_t n = strtol(b, &e, 10);
       if((*state).i) {
-        compile((int64_t)PRIM_LIT);
+        compile(PRIM_LIT);
         compile(n);
       } else
         PUSH(dataStack, n);
-    }
+		}
   }
 }
 
 char * words[] = {
-  ": ( 41 parse drop ; immediate",
-	": state 0 ;",
-  ": bl 32 ;",
-  ": [ 0 state ! ; immediate",
-  ": ] 1 state ! ; immediate",
-	": ' bl parse find @ ;",
-	": literal postpone (lit) compile ;",
-  ": over 1 pick ;",
-	": rot >R swap R> swap ;",
-  ": +! dup @ over + swap ! drop ;",
-  ": ++ 1 swap +! ;",
-  ": -- -1 swap +! ;",
-  ": cr 13 emit 10 emit ;", 
-  ": if postpone 0branch >mark postpone exit ; immediate",
-  ": then <resolve ; immediate",
-  ": else postpone branch >mark postpone exit swap <resolve ; immediate",
-  ": begin >mark postpone branch dup 4 + compile\
-     postpone branch postpone exit ; immediate",
-  ": leave postpone branch over 2 + compile ; immediate",
-  ": again postpone branch dup compile 3 + <resolve ; immediate",
-  ": variable create 0 , does> ;",
-  ": does> postpone (does>) postpone exit ; immediate",
-  ": constant create , does> @ ;",
-  ": fact reveal dup 1 < if drop 1 else dup 1 - fact * then ;",
-  ": char bl parse unpack drop c@ ;",
-  ": [char] char literal ; immediate",
+  ": ( 41 parse drop ; immediate ",
+	": state 0 ; ",
+  ": bl 32 ; ",
+  ": [ 0 state ! ; immediate ", 
+  ": ] 1 state ! ; immediate ",
+	": ' bl parse find @ ; ",
+	": literal postpone (lit) compile ; ",
+  ": over >r dup r> swap ; ",
+	": rot >r swap r> swap ; ",
+	": tuck swap over ; ",
+  ": nip swap drop ; ",
+  ": +! dup @ rot + swap ! ; ",
+  ": ++ 1 swap +! ; ",
+  ": -- -1 swap +! ; ",
+  ": cr 13 emit 10 emit ; ", 
+  ": if postpone 0branch >mark postpone exit ; immediate ",
+  ": then <resolve ; immediate ",
+  ": else postpone branch >mark postpone exit swap <resolve ; immediate ",
+  ": begin >mark ; immediate ",
+  ": again postpone branch compile ; immediate ",
+  ": variable create 0 , does> ; ",
+  ": does> postpone (does>) postpone exit ; immediate ",
+  ": constant create , does> @ ; ",
+  ": fact reveal dup 1 < if drop 1 else dup 1 - fact * then ; ",
+  ": char bl parse unpack drop c@ ; ",
+  ": [char] char literal ; immediate ",
   ": .\" state @ if [char] \" parse unpack dup allot\" pack \
-    literal postpone type else [char] \" parse type then ; immediate", 
-  ": hello begin .\" Hello! \" cr 1 - dup 0 = if leave then again drop ;"
+    literal postpone type else [char] \" parse type then ; immediate ", 
+  ": 0< 0 < ; ",
+	": 0= 0 = ; ",
+	": 0> 0 > ; ",
+	": 1- 1 - ; ",
+	": 1+ 1 + ; ",
+	": hello begin .\" Hello! \" cr 1- dup 0= if drop exit then again ; ",
+	": negate -1 * ; ",
+	": abs dup 0< if negate then ; ",
 };
 
 int main() {
-  state = &data[0];
-  (*state).i = 0;
-	fill_dict();
+	init();
 	for(int i=0; i<sizeof(words)/sizeof(char *); ++i) {
-    interpreter(words[i]);
-		substr_print(stream, 1);
-		printf("\n");
+    ntib = strlen(words[i]);
+		in = 0;
+		strncpy(&strings[0], words[i], ntib);
+		interpreter();
   }
+  printf("Chuck64 v0.1\n\n ok\n");
   while(1) {
-    fgets(&strings[0], 128, stdin);
-    interpreter(&strings[0]);
+    fgets(&strings[0], SCREEN_SIZE, stdin);
+    ntib = strlen(&strings[0])-1;
+		in = 0;
+		interpreter();
     printf(" ok\n");
   }
   return 0;
