@@ -96,6 +96,7 @@ static int64_t ip;
 #define PRIM_ENTRY ( 44 | FLAG_PRIMITIVE )
 #define PRIM_DIV ( 45 | FLAG_PRIMITIVE )
 #define PRIM_MOD ( 46 | FLAG_PRIMITIVE )
+#define PRIM_TOP_RETURN ( 47 | FLAG_PRIMITIVE )
 
 typedef struct dict_entry {
   char * symbol;
@@ -128,6 +129,7 @@ static dict_entry dictionary[] = {
   {"0branch", PRIM_ZERO_BRANCH},
   {"r>", PRIM_FROM_RETURN},
   {">r", PRIM_TO_RETURN},
+  {"r@", PRIM_TOP_RETURN},
   {">mark", PRIM_MARK},
   {"<resolve", PRIM_RESOLVE},
   {"emit", PRIM_EMIT},
@@ -350,7 +352,7 @@ void exec(int64_t t) {
 			entry();
 			break;
 		case PRIM_DOT:
-		  printf("%lld", POP(dataStack));
+		  printf("%lld ", POP(dataStack));
 			break;
 		case PRIM_REVEAL:
 			reveal();
@@ -399,6 +401,9 @@ void exec(int64_t t) {
 			break;
 		case PRIM_TO_RETURN:
   		PUSH(returnStack, POP(dataStack));
+			break;
+		case PRIM_TOP_RETURN:
+  		PUSH(dataStack, TOP(returnStack));
 			break;
 		case PRIM_MARK:
 		  PUSH(dataStack, code);
@@ -512,11 +517,19 @@ char * words[] = {
   ": [ 0 state ! ; immediate ", 
   ": ] 1 state ! ; immediate ",
 	": ' bl parse find @ ; ",
+	": [compile] ' compile ; immediate ",
 	": literal postpone (lit) compile ; ",
   ": over >r dup r> swap ; ",
 	": rot >r swap r> swap ; ",
+	": -rot swap >r swap r> ; ",
 	": tuck swap over ; ",
   ": nip swap drop ; ",
+	": 2dup over over ; ",
+  ": 0< 0 < ; ",
+	": 0= 0 = ; ",
+	": 0> 0 > ; ",
+	": 1- 1 - ; ",
+	": 1+ 1 + ; ",
   ": +! dup @ rot + swap ! ; ",
   ": ++ 1 swap +! ; ",
   ": -- -1 swap +! ; ",
@@ -526,19 +539,25 @@ char * words[] = {
   ": else postpone branch >mark postpone exit swap <resolve ; immediate ",
   ": begin >mark ; immediate ",
   ": again postpone branch compile ; immediate ",
-  ": variable create 0 , does> ; ",
+	": until postpone 0branch compile ; immediate ",
+	": while [compile] if swap ; immediate ",
+	": repeat [compile] again [compile] then ; immediate ",
+	": do postpone pack postpone >r >mark ; immediate ",
+//	": (checkloop) r> unpack 1+ 2dup pack >r > ; ",
+	": (checkloop) unpack 1+ 2dup pack ; ",
+	": i postpone r@ postpone unpack postpone nip ; immediate ",
+	": j postpone r> postpone r> postpone dup \
+	   postpone unpack postpone nip postpone -rot postpone >r postpone >r ; immediate ",
+	": loop postpone r> postpone (checkloop) postpone >r postpone > [compile] if swap \
+	  [compile] again [compile] then postpone r> postpone drop ; immediate ",
   ": does> postpone (does>) postpone exit ; immediate ",
+  ": variable create 0 , does> ; ",
   ": constant create , does> @ ; ",
   ": fact reveal dup 1 < if drop 1 else dup 1 - fact * then ; ",
   ": char bl parse unpack drop c@ ; ",
   ": [char] char literal ; immediate ",
   ": .\" state @ if [char] \" parse unpack dup allot\" pack \
     literal postpone type else [char] \" parse type then ; immediate ", 
-  ": 0< 0 < ; ",
-	": 0= 0 = ; ",
-	": 0> 0 > ; ",
-	": 1- 1 - ; ",
-	": 1+ 1 + ; ",
 	": hello begin .\" Hello! \" cr 1- dup 0= if drop exit then again ; ",
 	": negate -1 * ; ",
 	": abs dup 0< if negate then ; ",

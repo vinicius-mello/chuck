@@ -3,8 +3,9 @@
     {
       "type": "cppbuild",
       "label": "C/C++: gcc arquivo de build ativo",
-      "command": "/usr/bin/gcc",
+      "command": "/usr/bin/musl-gcc",
       "args": [
+        "-static",
         "-fdiagnostics-color=always",
         "-g",
         "${file}",
