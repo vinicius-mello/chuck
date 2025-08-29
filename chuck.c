@@ -32,7 +32,7 @@ static int dataStackTop = -1;
 #define POP(S) (assert((S##Top)>=0),(S)[(S##Top)--])
 #define DROP(S) (assert((S##Top)>=0),(S##Top)--)
 #define TOP(S) ((S)[(S##Top)])
-#define LEN(S) ((S##Top)+1)
+#define LEN(S) ((S##Top))
 
 #define SCREEN_SIZE (16*64)
 
@@ -111,6 +111,7 @@ static int64_t ip;
 #define _FSIN         58 
 #define _FCOS         59 
 #define _FSQRT        60
+#define _DEPTH        61
 
 typedef struct dict_entry {
   char * symbol;
@@ -181,6 +182,7 @@ static dict_entry dictionary[] = {
   {"fsin", _FSIN},
   {"fcos", _FCOS},
   {"fsqrt", _FSQRT},
+  {"depth", _DEPTH},
 };
 
 #define MAX_DATA 4096
@@ -562,6 +564,9 @@ void exec(int64_t t) {
 		  ca = POP(dataStack);
 		  PUSH(dataStack, sqrt(ca.f));
 			break;
+		case _DEPTH:
+		  PUSH(dataStack, (int64_t) LEN(dataStack));
+			break;
 	}
 }
 
@@ -659,6 +664,7 @@ char * words[] = {
 	": hello begin .\" Hello! \" cr 1- dup 0= if drop exit then again ; ",
 	": negate -1 * ; ",
 	": abs dup 0< if negate then ; ",
+	": .s depth 0 swap do i 1- pick . -1 +loop ; ",
 };
 
 int main() {
