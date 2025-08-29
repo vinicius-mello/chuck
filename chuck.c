@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <assert.h>
 #include <ctype.h>
+#include <math.h>
 
 typedef struct {
   int32_t a;
@@ -60,7 +61,7 @@ static int64_t ip;
 #define _FETCH         8 
 #define _CFETCH        9 
 #define _STORE        10 
-#define _QUIT         11 
+#define _BYE         11 
 #define _EXECUTE      12 
 #define _HERE         13 
 #define _TEXT         14 
@@ -98,6 +99,18 @@ static int64_t ip;
 #define _MOD          46 
 #define _TOP_RETURN   47 
 #define _CSTORE       48 
+#define _TO_FLOAT     49 
+#define _FADD         50 
+#define _FDOT         51 
+#define _FSUB         52 
+#define _FMUL         53 
+#define _FDIV         54 
+#define _FROM_FLOAT   55 
+#define _FEXP         56 
+#define _FLOG         57 
+#define _FSIN         58 
+#define _FCOS         59 
+#define _FSQRT        60
 
 typedef struct dict_entry {
   char * symbol;
@@ -119,7 +132,7 @@ static dict_entry dictionary[] = {
   {";", _SEMICOLON | FLAG_IMMEDIATE},
   {".", _DOT},
   {"reveal", _REVEAL | FLAG_IMMEDIATE},   
-  {"quit", _QUIT},  
+  {"bye", _BYE},  
   {"postpone", _POSTPONE | FLAG_IMMEDIATE},
   {"(comp)", _COMP},
   {"compile", _COMPILE},
@@ -156,6 +169,18 @@ static dict_entry dictionary[] = {
   {"/", _DIV},
   {"mod", _MOD},
   {"c!", _CSTORE},
+  {">f", _TO_FLOAT},
+  {"f+", _FADD},
+  {"f.", _FDOT},
+  {"f-", _FSUB},
+  {"f*", _FMUL},
+  {"f/", _FDIV},
+  {"<f", _FROM_FLOAT},
+  {"fexp", _FEXP},
+  {"flog", _FLOG},
+  {"fsin", _FSIN},
+  {"fcos", _FCOS},
+  {"fsqrt", _FSQRT},
 };
 
 #define MAX_DATA 4096
@@ -330,7 +355,7 @@ void exec(int64_t t) {
   		cb = POP(dataStack);
   		data[a] = cb;
 			break;
-		case _QUIT:
+		case _BYE:
 		  exit(0);
 			break;
 		case _EXECUTE:
@@ -486,6 +511,57 @@ void exec(int64_t t) {
   		cb = POP(dataStack);
   		strings[a] = (char) cb.i;
 			break;
+		case _TO_FLOAT:
+		  ca = POP(dataStack);
+  		PUSH(dataStack, (double) ca.i);
+			break;
+		case _FADD:
+		  cb = POP(dataStack);
+		  ca = POP(dataStack);
+  		PUSH(dataStack, ca.f+cb.f);
+			break;
+		case _FDOT:
+		  printf("%lf ", POP(dataStack).f);
+			break;
+		case _FSUB:
+		  cb = POP(dataStack);
+		  ca = POP(dataStack);
+  		PUSH(dataStack, ca.f-cb.f);
+			break;
+		case _FMUL:
+		  cb = POP(dataStack);
+		  ca = POP(dataStack);
+  		PUSH(dataStack, ca.f*cb.f);
+			break;
+		case _FDIV:
+		  cb = POP(dataStack);
+		  ca = POP(dataStack);
+  		PUSH(dataStack, ca.f/cb.f);
+			break;
+		case _FROM_FLOAT:
+		  ca = POP(dataStack);
+		  PUSH(dataStack, (int64_t) ca.f);
+			break;
+		case _FEXP:
+		  ca = POP(dataStack);
+		  PUSH(dataStack, exp(ca.f));
+			break;
+		case _FLOG:
+		  ca = POP(dataStack);
+		  PUSH(dataStack, log(ca.f));
+			break;
+		case _FSIN:
+		  ca = POP(dataStack);
+		  PUSH(dataStack, sin(ca.f));
+			break;
+		case _FCOS:
+		  ca = POP(dataStack);
+		  PUSH(dataStack, cos(ca.f));
+			break;
+		case _FSQRT:
+		  ca = POP(dataStack);
+		  PUSH(dataStack, sqrt(ca.f));
+			break;
 	}
 }
 
@@ -533,15 +609,22 @@ char * words[] = {
 	": tuck swap over ; ",
   ": nip swap drop ; ",
 	": 2dup over over ; ",
+	": 2swap rot >r rot r> ; ",
+	": 2drop drop drop ; ",
   ": 0< 0 < ; ",
 	": 0= 0 = ; ",
 	": 0> 0 > ; ",
+	": not 0= ;",
 	": 1- 1 - ; ",
 	": 1+ 1 + ; ",
   ": +! dup @ rot + swap ! ; ",
   ": ++ 1 swap +! ; ",
   ": -- -1 swap +! ; ",
   ": cr 13 emit 10 emit ; ", 
+  ": does> postpone (does>) postpone exit ; immediate ",
+  ": variable create 0 , does> ; ",
+  ": constant create , does> @ ; ",
+	": array create allot does> + ;",
   ": if postpone 0branch >mark postpone exit ; immediate ",
   ": then <resolve ; immediate ",
   ": else postpone branch >mark postpone exit swap <resolve ; immediate ",
@@ -550,17 +633,24 @@ char * words[] = {
 	": until postpone 0branch compile ; immediate ",
 	": while [compile] if swap ; immediate ",
 	": repeat [compile] again [compile] then ; immediate ",
-	": do postpone pack postpone >r >mark ; immediate ",
-//	": (checkloop) r> unpack 1+ 2dup pack >r > ; ",
+	"5 constant (leave-stack-max) ",
+	"(leave-stack-max) array (leave-stack) ",
+	"variable (ls@)  (ls@) --",
+	": (>l) (ls@) ++ (ls@) @ (leave-stack) ! ;",
+	": (@l) (ls@) @ (leave-stack) @ ;",
+	": (l>) (@l) (ls@) -- ;",
+	": do postpone pack postpone >r >mark postpone branch dup 4 + compile \
+	   >mark (>l) postpone branch postpone exit ; immediate ",
+	": leave postpone branch (@l) compile ; immediate",
 	": (checkloop) unpack 1+ 2dup pack ; ",
+	": (check+loop) unpack rot dup 0> if + 2dup else + 2dup swap 2swap then pack ; ",
 	": i postpone r@ postpone unpack postpone nip ; immediate ",
 	": j postpone r> postpone r> postpone dup \
 	   postpone unpack postpone nip postpone -rot postpone >r postpone >r ; immediate ",
 	": loop postpone r> postpone (checkloop) postpone >r postpone > [compile] if swap \
-	  [compile] again [compile] then postpone r> postpone drop ; immediate ",
-  ": does> postpone (does>) postpone exit ; immediate ",
-  ": variable create 0 , does> ; ",
-  ": constant create , does> @ ; ",
+	  [compile] again [compile] then (l>) 1+ <resolve postpone r> postpone drop ; immediate ",
+  ": +loop postpone r> postpone (check+loop) postpone >r postpone > [compile] if swap \
+	  [compile] again [compile] then (l>) 1+ <resolve postpone r> postpone drop ; immediate ",
   ": fact reveal dup 1 < if drop 1 else dup 1 - fact * then ; ",
   ": char bl parse unpack drop c@ ; ",
   ": [char] char literal ; immediate ",
