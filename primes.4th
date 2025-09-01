@@ -9,5 +9,4 @@
 	if i . then 
 	2 +loop
 	drop ;
-100000 prime
 bye

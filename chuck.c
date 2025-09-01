@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <math.h>
+#include <sys/time.h>
 
 typedef struct {
   int32_t a;
@@ -28,11 +29,19 @@ static cell returnStack[MAX_STACK];
 static int returnStackTop = -1; 
 static cell dataStack[MAX_STACK];
 static int dataStackTop = -1; 
+#if 0 
 #define PUSH(S,V) (assert((S##Top)<MAX_STACK),(S)[(++S##Top)] = (cell)(V))
 #define POP(S) (assert((S##Top)>=0),(S)[(S##Top)--])
 #define DROP(S) (assert((S##Top)>=0),(S##Top)--)
 #define TOP(S) ((S)[(S##Top)])
 #define LEN(S) ((S##Top))
+#else
+#define PUSH(S,V) ((S)[(++S##Top)] = (cell)(V))
+#define POP(S) ((S)[(S##Top)--])
+#define DROP(S) ((S##Top)--)
+#define TOP(S) ((S)[(S##Top)])
+#define LEN(S) ((S##Top))
+#endif
 
 #define SCREEN_SIZE (16*64)
 
@@ -44,7 +53,7 @@ static int64_t _here;
 static int64_t _code;
 static int64_t _text;
 static int64_t ip;
-
+//register int64_t ip asm("ebx");  
 
 #define FLAG_PRIMITIVE (1LL << 63)
 #define FLAG_IMMEDIATE (1LL << 62)
@@ -112,6 +121,7 @@ static int64_t ip;
 #define _FCOS         59 
 #define _FSQRT        60
 #define _DEPTH        61
+#define _MTIME        62
 
 typedef struct dict_entry {
   char * symbol;
@@ -183,6 +193,7 @@ static dict_entry dictionary[] = {
   {"fcos", _FCOS},
   {"fsqrt", _FSQRT},
   {"depth", _DEPTH},
+  {"mtime", _MTIME},
 };
 
 #define MAX_DATA 4096
@@ -306,9 +317,11 @@ void reveal() {
 
 void exec(int64_t t) {
 	t &= CLEAR_FLAGS;
-	int64_t a, b; 
-  cell ca, cb;
+	register int64_t a, b; 
+  register cell ca, cb;
 	pair_int pi;
+	struct timeval tv;
+
 	switch(t) {
 		case _EXIT:
 	  	ip = POP(returnStack).i;
@@ -567,6 +580,10 @@ void exec(int64_t t) {
 		case _DEPTH:
 		  PUSH(dataStack, (int64_t) LEN(dataStack));
 			break;
+		case _MTIME:
+			gettimeofday(&tv, NULL);
+		  PUSH(dataStack, (int64_t) (tv.tv_usec/1000)+(tv.tv_sec*1000));
+			break;
 	}
 }
 
@@ -664,7 +681,7 @@ char * words[] = {
 	": hello begin .\" Hello! \" cr 1- dup 0= if drop exit then again ; ",
 	": negate -1 * ; ",
 	": abs dup 0< if negate then ; ",
-	": .s depth 0 swap do i 1- pick . -1 +loop ; ",
+	": .s depth dup 0= if drop exit then -1 swap 1- do i pick . -1 +loop ; ",
 };
 
 int main() {
