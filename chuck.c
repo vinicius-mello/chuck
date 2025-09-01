@@ -70,7 +70,7 @@ static int64_t ip;
 #define _FETCH         8 
 #define _CFETCH        9 
 #define _STORE        10 
-#define _BYE         11 
+#define _BYE          11 
 #define _EXECUTE      12 
 #define _HERE         13 
 #define _TEXT         14 
